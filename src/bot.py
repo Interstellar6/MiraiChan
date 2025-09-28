@@ -32,7 +32,7 @@ class GlobalConfigModel(BaseModel):
     load_depth: int = 3
 
 
-with open("./config.json", "rb") as fp:
+with open("config.json", "rb") as fp:
     cfg = GlobalConfigModel.model_validate_json(fp.read())
 debug = "--debug" in sys.argv or cfg.debug
 
@@ -43,7 +43,7 @@ os.makedirs("data", exist_ok=True)
 if __name__ == "__main__":
     bot = (
         Bot(
-            "MiraiChan",
+            "Elaina",
             logger=logger,
         )
         .add_io(ForwardWebSocketIO(**cfg.forwwsio.model_dump()))

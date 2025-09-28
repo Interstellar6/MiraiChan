@@ -162,7 +162,7 @@ cython_debug/
 #.idea/
 
 samples/
-/config.json
+config.json
 plugin_config/
 melobot.log*
 *.db
@@ -171,3 +171,6 @@ data/avatars/
 data/reboot_info.json
 pdm.lock
 uv.lock
+
+# Lagrange models
+Lagrange/
