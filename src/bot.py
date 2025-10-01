@@ -36,7 +36,7 @@ with open("config.json", "rb") as fp:
     cfg = GlobalConfigModel.model_validate_json(fp.read())
 debug = "--debug" in sys.argv or cfg.debug
 
-logger = Logger(level=LogLevel.DEBUG if debug else LogLevel.INFO)
+logger = Logger(level=LogLevel.DEBUG if debug else LogLevel.DEBUG)
 logger.debug("Config: " + cfg.model_dump_json(indent=4))
 os.makedirs("data", exist_ok=True)
 

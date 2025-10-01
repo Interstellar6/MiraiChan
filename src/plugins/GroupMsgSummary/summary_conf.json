@@ -1,0 +1,7 @@
+{
+  "ollama_model": "llama2",
+  "ollama_endpoint": "http://localhost:11434",
+  "prompt_template": "请对以下群聊对话内容进行简洁的摘要，提取主要话题和关键信息。对话内容如下：\n\n{conversation}\n\n请用中文给出摘要：",
+  "max_conversation_length": 4000,
+  "timeout": 180
+}

@@ -1,0 +1,28 @@
+{
+    "forwwsio": {
+        "url": "ws://localhost:8081/onebot/v11/ws",
+        "access_token": "welcome to elaina world, let's ero moncak now!!"
+    },
+    "plugins": [
+        "src/plugins/EmergencyStop",
+        "src/plugins/Helper",
+        "src/plugins/AliasProvider",
+        "src/plugins/OneBotInfoProvider",
+        "src/plugins/EroMoncak",
+        "src/plugins/Pooooke",
+        "src/plugins/Executor",
+        "src/plugins/WhatToListenToday",
+        "src/plugins/JustQuote",
+        "src/plugins/MoeAttriLottery",
+        "src/plugins/MoncakAttriLottery",
+        "src/plugins/DailyWaifu",
+        "src/plugins/ArknightsUtils",
+        "src/plugins/LemonyUtils",
+        "src/plugins/BiliLinkPurify",
+        "src/plugins/VVTTS",
+        "src/plugins/Recorder",
+        "src/plugins/RecorderTest",
+        "src/plugins/MomoQuote",
+        "src/plugins/Deeeer"
+    ]
+}
