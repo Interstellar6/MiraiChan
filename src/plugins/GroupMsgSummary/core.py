@@ -103,7 +103,7 @@ class SummaryGenerator:
 	def __init__(self, config: SummaryConfig):
 		self.config = config
 
-	async def generate_summary(self, conversation: list[ConversationMessage]) -> str:
+	async def generate_summary1(self, conversation: list[ConversationMessage]) -> str:
 		"""调用ollama生成会话摘要"""
 		# 构建对话文本
 		conversation_text = self._format_conversation(conversation)
@@ -215,7 +215,7 @@ class SummaryCore:
 
 			return data, resources
 
-	async def generate_summary(self, data: SummaryData) -> str:
+	async def generate_summary2(self, data: SummaryData) -> str:
 		"""生成摘要"""
-		summary = await self.generator.generate_summary(data["conversation"])
+		summary = await self.generator.generate_summary1(data["conversation"])
 		return summary

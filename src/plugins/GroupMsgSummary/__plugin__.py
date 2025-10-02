@@ -143,7 +143,7 @@ rule = SameSummaryRule()
 @on_command(
 	".",
 	" ",
-	["summary"],
+	["summary", "sum"],
 	decos=[
 		auto_report_traceback,
 		unfold_ctx(
@@ -154,8 +154,8 @@ rule = SameSummaryRule()
 	],
 )
 async def generate_summary(
-	adapter: Annotated[Adapter, Reflect()],
-	event: Annotated[GroupMessageEvent, Reflect()],
+		adapter: Annotated[Adapter, Reflect()],
+		event: Annotated[GroupMessageEvent, Reflect()],
 ):
 	"""生成会话摘要"""
 	if not Recorder.database.started.is_set():
@@ -166,9 +166,9 @@ async def generate_summary(
 	count, (start, end), sender_only = extract_summary_params(event)
 
 	# 参数验证
-	if count is None and (start is None or end is None):
-		await adapter.send_reply("请指定消息范围：使用数字N（最近N条）或区间[Start,End]")
-		return
+	# if count is None and (start is None or end is None):
+	# 	await adapter.send_reply("请指定消息范围：使用数字N（最近N条）或区间[Start,End]")
+	# 	return
 
 	if count is not None and count <= 0:
 		await adapter.send_reply("消息数量必须为正数")
@@ -219,7 +219,7 @@ async def generate_summary(
 			return
 
 		# 生成摘要
-		summary_result = await summary_core.generate_summary(data)
+		summary_result = await summary_core.generate_summary2(data)
 
 		# 发送摘要结果
 		await adapter.send(
