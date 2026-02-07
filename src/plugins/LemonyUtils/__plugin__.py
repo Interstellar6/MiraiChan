@@ -59,11 +59,15 @@ little_helper.register(
         "cmd": ".{poweroff,shutdown,关机}",
         "text": "关闭Bot程序\n*Owner Only*",
     },
+    {
+        "cmd": ".{早安,checkin,签到}",
+        "text": "一键签到\n*Owner Only*",
+    },
 )
 
 
 @LemonyUtils.use
-@on_command(".", " ", "echo", checker=checker_factory.get_owner_checker())
+@on_command(".", " ", "echo")
 async def echo(adapter: Adapter, event: MessageEvent):
     try:
         msg = await get_reply(adapter, event)
@@ -234,3 +238,22 @@ async def startup_check(adapter: Adapter):
 @on_event()
 async def auto_withdraw_reply(adapter: Adapter, event: GroupRecallNoticeEvent):
     raise NotImplementedError
+
+@LemonyUtils.use
+@on_command(
+    ".",
+    " ",
+    ["早安", "签到", "checkin"],
+    checker=checker_factory.get_owner_checker(),
+)
+async def checkin(adapter: Adapter, event: MessageEvent):
+    SAYINGS_ON_CHECKIN = [
+        "~今日运势",
+        "~吃什么",
+        ".waifu",
+        ".今日人设",
+        ".今天听什么",
+        "🦌",
+    ]
+    for i in SAYINGS_ON_CHECKIN:
+        await adapter.send_reply(i)

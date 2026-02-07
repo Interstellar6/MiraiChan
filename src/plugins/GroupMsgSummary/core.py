@@ -3,7 +3,7 @@ import json
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import TypedDict, cast
+from typing import TypedDict
 
 from melobot.protocols.onebot.v11.adapter.segment import (
 	AtSegment,
@@ -12,11 +12,9 @@ from melobot.protocols.onebot.v11.adapter.segment import (
 	Segment,
 	TextSegment,
 )
-from pydantic import BaseModel
 from sqlmodel import col, select
 from yarl import URL
 
-from lemony_utils.asyncutils import gather_with_concurrency
 from lemony_utils.botutils import cached_avatar_source
 from lemony_utils.consts import http_headers
 from lemony_utils.templates import async_http
@@ -70,7 +68,7 @@ def extract_text_from_segments(segments: list[Segment]) -> str:
 
 
 def prepare_conversation_data(
-		msgs: list[Message], banned_sticker_sets: Iterable[int] = ()
+		msgs: list[Message]
 ) -> tuple[list[ConversationMessage], set[URL | str]]:
 	"""准备会话数据，提取文本内容"""
 	resources = set[URL | str]()
@@ -103,7 +101,7 @@ class SummaryGenerator:
 	def __init__(self, config: SummaryConfig):
 		self.config = config
 
-	async def generate_summary1(self, conversation: list[ConversationMessage]) -> str:
+	async def generate_summary(self, conversation: list[ConversationMessage]) -> str:
 		"""调用ollama生成会话摘要"""
 		# 构建对话文本
 		conversation_text = self._format_conversation(conversation)
@@ -163,41 +161,24 @@ class SummaryCore:
 
 	async def prepare_summary_data(
 			self,
-			base_msgid: int,
 			group_id: int,
 			sender_id: int | None,
-			count: int | None,
-			start: int,
-			end: int,
+			count: int,
 			sender_only: bool
 	) -> tuple[SummaryData | None, set[URL | str]]:
-		"""准备摘要数据"""
+		"""准备摘要数据 - 使用新的get_recent_messages函数"""
 		from .. import Recorder
 
 		async with Recorder.database.get_session() as sess:
-			# 构建查询
-			query = select(Message).where(
-				Message.group_id == group_id
-			).order_by(col(Message.timestamp).desc())
-
-			# 根据参数类型获取消息
-			if count is not None:
-				# 获取最近N条消息
-				messages = (await sess.exec(query.limit(count))).all()
-				messages.reverse()  # 按时间顺序排列
-			else:
-				# 获取指定区间的消息
-				all_messages = (await sess.exec(query)).all()
-				all_messages.reverse()
-
-				if start < 0 or end >= len(all_messages):
-					return None, set()
-
-				messages = all_messages[start:end + 1]
-
-			# 如果指定了sender_only，过滤消息
-			if sender_only and sender_id:
-				messages = [msg for msg in messages if msg.sender_id == sender_id]
+			# 使用get_recent_messages函数获取最近count条消息
+			messages = await Recorder.database.run_sync(
+				lambda session: Recorder.utils.get_recent_messages(
+					session,
+					group_id=group_id,
+					count=count,
+					sender_id=sender_id if sender_only else None
+				)
+			)
 
 			if not messages:
 				return None, set()
@@ -215,7 +196,10 @@ class SummaryCore:
 
 			return data, resources
 
-	async def generate_summary2(self, data: SummaryData) -> str:
+	async def generate_summary(self, data: SummaryData) -> str:
 		"""生成摘要"""
-		summary = await self.generator.generate_summary1(data["conversation"])
+		if not data or not data.get("conversation"):
+			return "没有可摘要的消息内容"
+
+		summary = await self.generator.generate_summary(data["conversation"])
 		return summary

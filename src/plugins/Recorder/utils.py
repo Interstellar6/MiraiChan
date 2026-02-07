@@ -2,41 +2,42 @@ from datetime import datetime
 from typing import TypedDict, Unpack
 
 from sqlmodel import Session, and_, col, desc, func, or_, select
+from sqlalchemy.orm import joinedload
 
 from recorder_models import Message, User
 
 
 def query_group_msg_count(
-    session: Session, group_id: int, start_time: datetime, end_time: datetime
+		session: Session, group_id: int, start_time: datetime, end_time: datetime
 ):
-    query = (
-        select(User.id, func.count(Message.message_id).label("message_count"))
-        .join(Message, Message.sender_id == User.id)
-        .where(
-            Message.group_id == group_id,
-            col(Message.timestamp).between(
-                start_time.timestamp(), end_time.timestamp()
-            ),
-        )
-        .group_by(User.id)
-        .order_by(desc("message_count"))
-    )
-    return dict(session.exec(query).all())
+	query = (
+		select(User.id, func.count(Message.message_id).label("message_count"))
+		.join(Message, Message.sender_id == User.id)
+		.where(
+			Message.group_id == group_id,
+			col(Message.timestamp).between(
+				start_time.timestamp(), end_time.timestamp()
+			),
+		)
+		.group_by(User.id)
+		.order_by(desc("message_count"))
+	)
+	return dict(session.exec(query).all())
 
 
 class RangeContextParams(TypedDict):
-    base_msgid: int
-    group_id: int
-    sender_id: int
-    edge_e: int = 0
-    edge_l: int = 0
-    sender_only: bool = False
+	base_msgid: int
+	group_id: int
+	sender_id: int
+	edge_e: int = 0
+	edge_l: int = 0
+	sender_only: bool = False
 
 
-def get_context_messages(
-    session: Session, **context: Unpack[RangeContextParams]
+def get_context_messages1(
+		session: Session, **context: Unpack[RangeContextParams]
 ) -> list[Message]:
-    """
+	"""
     ```
     Index
     -3 ↑ Earlier
@@ -53,6 +54,87 @@ def get_context_messages(
     按照 message_id 可能不唯一的情况进行处理, 所以在获取基准消息时还需要再约束 sender_id
     真正唯一的列是消息录入时自动生成的 store_id, 类型为 uuid4
     """
+	_ = (context["edge_e"], context["edge_l"])
+	edge_e, edge_l = min(_), max(_)
+	gid = context["group_id"]
+	uid = context["sender_id"]
+	mid = context["base_msgid"]
+	extra_filters = [Message.sender_id == uid] if context["sender_only"] else []
+
+	base_message = session.exec(
+		select(Message)
+		.where(
+			Message.group_id == gid,
+			Message.sender_id == uid,
+			Message.message_id == mid,
+		)
+		.order_by(col(Message.timestamp).desc(), col(Message.message_id).desc())
+	).first()
+	if not base_message:
+		return []
+	if edge_e == edge_l == 0:
+		return [base_message]
+
+	base_mid = base_message.message_id
+	base_time = base_message.timestamp
+	earliers = []
+	laters = []
+	if edge_e < 0:
+		earliers = session.exec(
+			select(Message)
+			.where(
+				Message.group_id == gid,
+				or_(
+					Message.timestamp < base_time,
+					and_(
+						Message.timestamp == base_time,
+						Message.message_id < base_mid,
+					),
+				),
+				*extra_filters,
+			)
+			.distinct()
+			.order_by(col(Message.timestamp).desc(), col(Message.message_id).desc())
+			# 按时间倒序获取最新早消息, 在上报的时间戳重复时按局部随时间递增的 message_id 二次排序
+			# 不同实现端的行为可能不太一样 但是没办法了 ()
+			.limit(abs(edge_e))
+		).all()
+	if edge_l > 0:
+		laters = session.exec(
+			select(Message)
+			.where(
+				Message.group_id == gid,
+				or_(
+					Message.timestamp > base_time,
+					and_(
+						Message.timestamp == base_time,
+						Message.message_id > base_mid,
+					),
+				),
+				*extra_filters,
+			)
+			.distinct()
+			.order_by(
+				col(Message.timestamp).asc(), col(Message.message_id).asc()
+			)  # 按时间正序获取
+			.limit(edge_l)
+		).all()
+	if edge_e > 0:
+		return laters[edge_e - 1:] if edge_e <= len(laters) else []
+	elif edge_l < 0:
+		return earliers[abs(edge_l) - 1:][::-1] if abs(edge_l) <= len(earliers) else []
+	else:
+		return earliers[::-1] + [base_message] + laters
+
+
+def get_context_messages(
+        session: Session, **context: Unpack[RangeContextParams]
+) -> list[Message]:
+    """
+    获取上下文消息，主动加载 segments 关系
+    """
+    from sqlalchemy.orm import joinedload
+
     _ = (context["edge_e"], context["edge_l"])
     edge_e, edge_l = min(_), max(_)
     gid = context["group_id"]
@@ -60,8 +142,10 @@ def get_context_messages(
     mid = context["base_msgid"]
     extra_filters = [Message.sender_id == uid] if context["sender_only"] else []
 
+    # 查询基准消息，主动加载关系
     base_message = session.exec(
         select(Message)
+        .options(joinedload(Message.sender), joinedload(Message.segments))
         .where(
             Message.group_id == gid,
             Message.sender_id == uid,
@@ -78,9 +162,12 @@ def get_context_messages(
     base_time = base_message.timestamp
     earliers = []
     laters = []
+
+    # 查询早于基准的消息，主动加载关系
     if edge_e < 0:
         earliers = session.exec(
             select(Message)
+            .options(joinedload(Message.sender), joinedload(Message.segments))
             .where(
                 Message.group_id == gid,
                 or_(
@@ -94,13 +181,14 @@ def get_context_messages(
             )
             .distinct()
             .order_by(col(Message.timestamp).desc(), col(Message.message_id).desc())
-            # 按时间倒序获取最新早消息, 在上报的时间戳重复时按局部随时间递增的 message_id 二次排序
-            # 不同实现端的行为可能不太一样 但是没办法了 ()
             .limit(abs(edge_e))
         ).all()
+
+    # 查询晚于基准的消息，主动加载关系
     if edge_l > 0:
         laters = session.exec(
             select(Message)
+            .options(joinedload(Message.sender), joinedload(Message.segments))
             .where(
                 Message.group_id == gid,
                 or_(
@@ -115,12 +203,54 @@ def get_context_messages(
             .distinct()
             .order_by(
                 col(Message.timestamp).asc(), col(Message.message_id).asc()
-            )  # 按时间正序获取
+            )
             .limit(edge_l)
         ).all()
+
     if edge_e > 0:
-        return laters[edge_e - 1 :] if edge_e <= len(laters) else []
+        return laters[edge_e - 1:] if edge_e <= len(laters) else []
     elif edge_l < 0:
-        return earliers[abs(edge_l) - 1 :][::-1] if abs(edge_l) <= len(earliers) else []
+        return earliers[abs(edge_l) - 1:][::-1] if abs(edge_l) <= len(earliers) else []
     else:
         return earliers[::-1] + [base_message] + laters
+
+
+async def get_recent_messages(
+		session: Session,
+		group_id: int,
+		count: int,
+		sender_id: int | None = None
+) -> list[Message]:
+	"""
+    获取群聊中最近N条消息
+
+    Args:
+        session: 数据库会话
+        group_id: 群组ID
+        count: 要获取的消息数量
+        sender_id: 可选，如果提供则只获取指定发送者的消息
+
+    Returns:
+        按时间戳递增排序的消息列表（从早到晚）
+    """
+	# 构建基础查询，使用 joinedload 主动加载 segments 和 sender 关系
+	from sqlalchemy.orm import joinedload
+
+	query = select(Message).options(
+		joinedload(Message.sender),
+		joinedload(Message.segments)  # 主动加载 segments 关系
+	).where(
+		Message.group_id == group_id
+	)
+
+	if sender_id is not None:
+		query = query.where(Message.sender_id == sender_id)
+
+	messages = session.exec(
+		query.order_by(
+			col(Message.timestamp).desc(),
+			col(Message.message_id).desc()
+		).limit(count)
+	).unique().all()
+
+	return list(reversed(messages))

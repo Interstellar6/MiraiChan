@@ -22,6 +22,7 @@
         "src/plugins/VVTTS",
         "src/plugins/Recorder",
         "src/plugins/RecorderTest",
+        "src/plugins/UnnmeiModify",
         "src/plugins/MomoQuote",
         "src/plugins/Deeeer"
     ]

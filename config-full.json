@@ -24,6 +24,7 @@
         "src/plugins/RecorderTest",
         "src/plugins/MomoQuote",
         "src/plugins/Deeeer",
-        "src/plugins/GroupMsgSummary"
+        "src/plugins/GroupMsgSummary",
+        "src/plugins/UnnmeiModify"
     ]
 }

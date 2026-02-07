@@ -1,12 +1,11 @@
 import asyncio
-import functools
-import os
 import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated
 
+import melobot
 from melobot import get_logger, send_text
 from melobot.di import Reflect
 from melobot.handle import on_command
@@ -16,7 +15,6 @@ from melobot.protocols.onebot.v11.adapter.event import GroupMessageEvent, Messag
 from melobot.protocols.onebot.v11.adapter.segment import ReplySegment, TextSegment
 from melobot.session import Rule, enter_session, suspend
 from melobot.utils import singleton, unfold_ctx
-from pydantic import BaseModel
 from sqlmodel import col, select
 
 import checker_factory
@@ -26,19 +24,19 @@ from lemony_utils.botutils import auto_report_traceback, get_reply
 from recorder_models import Message
 
 from .. import Recorder
-from .core import SummaryCore, SummaryConfig, extract_text_from_segments
+from .core import SummaryCore
 from .params import SummaryConfig as SummaryConfigModel
 
 logger = get_logger()
+melobot.set_traceback_style(hide_internal=False)
 
 little_helper.register(
 	"GroupMsgSummary",
 	{
-		"cmd": r".summary [\d] [[\d, \d]] [sender_?only]",
+		"cmd": r".sum(?:mary)? \d+(?: --sender-only)?",
 		"text": "生成群聊会话摘要。"
-		        "\n使用数字N表示对最近N条消息生成摘要。"
-		        "\n使用区间[Start,End]表示对指定范围内的消息生成摘要。"
-		        "\n添加 'sender_only' flag 将摘要限制为仅指定发送者的消息。",
+		        "\n使用 .sum M 或 .summary M 对最近M条消息生成摘要。"
+		        "\n添加 --sender-only 标志将摘要限制为仅被引用消息发送者的消息。",
 	},
 )
 
@@ -85,9 +83,12 @@ class MsgFromDB:
 async def get_reply_from_db(event: GroupMessageEvent):
 	msg_id = get_reply_msg_id(event)
 	async with Recorder.database.get_session() as sess:
+		from sqlalchemy.orm import joinedload
+
 		msg = (
 			await sess.exec(
 				select(Message)
+				.options(joinedload(Message.sender), joinedload(Message.segments))  # 主动加载关系
 				.where(Message.message_id == msg_id, Message.group_id == event.group_id)
 				.order_by(col(Message.timestamp).desc())
 			)
@@ -96,33 +97,29 @@ async def get_reply_from_db(event: GroupMessageEvent):
 			result = MsgFromDB(
 				msg_id=msg_id,
 				sender_id=msg.sender_id,
-				sender_name=(await msg.awaitable_attrs.sender).name
-				            or str(msg.sender_id),
+				sender_name=(msg.sender.name if msg.sender else str(msg.sender_id)),  # 直接访问，不需要 awaitable_attrs
 			)
 			logger.debug(f"Got reply record form db: {result!r}")
 			return result
 
 
 def extract_summary_params(event: GroupMessageEvent):
-	"""提取摘要参数"""
+	"""提取摘要参数 - 新格式: .sum M [--sender-only]"""
 	params = event.text.strip()
+	logger.debug(f"Raw params: {params}")
 
-	# 解析数字N（最近N条消息）
+	# 解析数字M（最近M条消息）
 	count = None
-	if match := re.search(r"^\s*(\d+)\s*", params):
+	# 使用更灵活的正则表达式匹配数字
+	if match := re.search(r"(\d+)", params):
 		count = int(match.group(1))
-		params = params[match.end():]
+		logger.debug(f"Parsed count: {count}")
 
-	# 解析区间[Start,End]
-	start, end = None, None
-	if match := re.search(r"\[\s*(\d+)\s*\,\s*(\d+)\s*\]", params, re.IGNORECASE):
-		start, end = map(int, match.group(1, 2))
-		params = params.replace(match.group(), "")
+	# 解析--sender-only标志
+	sender_only = bool(re.search(r"--sender-only", params, re.IGNORECASE))
+	logger.debug(f"Sender only: {sender_only}")
 
-	# 解析sender_only标志
-	sender_only = bool(re.search(r"sender[\s_\-]only", params, re.IGNORECASE))
-
-	return count, (start, end), sender_only
+	return count, sender_only
 
 
 class SameSummaryRule(Rule[GroupMessageEvent]):
@@ -131,9 +128,9 @@ class SameSummaryRule(Rule[GroupMessageEvent]):
 			r1, r2 = get_reply_msg_id(e1), get_reply_msg_id(e2)
 		except get_reply.GetReplyException:
 			return False
-		c1, rng1, so1 = extract_summary_params(e1)
-		c2, rng2, so2 = extract_summary_params(e2)
-		return (r1, c1, rng1, so1) == (r2, c2, rng2, so2)
+		c1, so1 = extract_summary_params(e1)
+		c2, so2 = extract_summary_params(e2)
+		return (r1, c1, so1) == (r2, c2, so2)
 
 
 rule = SameSummaryRule()
@@ -143,7 +140,7 @@ rule = SameSummaryRule()
 @on_command(
 	".",
 	" ",
-	["summary", "sum"],
+	["summary", "sum"],  # 保留两个别名
 	decos=[
 		auto_report_traceback,
 		unfold_ctx(
@@ -163,24 +160,22 @@ async def generate_summary(
 		return
 
 	# 解析参数
-	count, (start, end), sender_only = extract_summary_params(event)
+	count, sender_only = extract_summary_params(event)
+	logger.debug(f"Final parsed params - count: {count}, sender_only: {sender_only}")
 
 	# 参数验证
-	# if count is None and (start is None or end is None):
-	# 	await adapter.send_reply("请指定消息范围：使用数字N（最近N条）或区间[Start,End]")
-	# 	return
-
-	if count is not None and count <= 0:
-		await adapter.send_reply("消息数量必须为正数")
+	if count is None:
+		await adapter.send_reply("请指定消息数量：使用 .sum M 或 .summary M，其中M为要摘要的消息数量")
 		return
 
-	if start is not None and end is not None:
-		if start < 0 or end < 0:
-			await adapter.send_reply("区间索引必须为非负数")
-			return
-		if start > end:
-			await adapter.send_reply("区间起始索引不能大于结束索引")
-			return
+	if count <= 0:
+		await adapter.send_reply("消息数量必须为正整数")
+		return
+
+	# 限制最大消息数量
+	if count > 100:
+		await adapter.send_reply("消息数量过多，最多支持100条消息的摘要")
+		return
 
 	# 获取基准消息（用于sender_only）
 	base_sender_id = None
@@ -195,35 +190,55 @@ async def generate_summary(
 					sender_name=echo.data["sender"].nickname,
 				)
 			base_sender_id = target.sender_id
+			logger.debug(f"Using sender_only mode for user {base_sender_id}")
 		except get_reply.GetReplyException:
-			await adapter.send_reply("需要指定基准消息以使用sender_only功能")
+			await adapter.send_reply("使用 --sender-only 时需要回复一条消息以确定发送者")
 			return
 
 	# 生成摘要
-	await adapter.send_reply("正在生成会话摘要，请稍候...")
+	await adapter.send_reply(f"正在对最近 {count} 条消息生成会话摘要，请稍候..." +
+	                         (" (仅限被引用用户)" if sender_only else ""))
 
 	try:
+		# 使用当前.sum指令的消息作为基准消息
+		base_msgid = event.message_id
+
 		# 准备摘要数据
-		data, resources = await summary_core.prepare_summary_data(
-			base_msgid=0,  # 对于summary，不需要基准消息ID
+		result = await summary_core.prepare_summary_data(
 			group_id=event.group_id,
 			sender_id=base_sender_id,
 			count=count,
-			start=start or 0,
-			end=end or 0,
 			sender_only=sender_only
 		)
 
-		if not data:
+		# 检查结果是否为None
+		if result is None:
+			logger.error("result is None, 没有找到符合条件的消息")
 			await adapter.send_reply("没有找到符合条件的消息")
 			return
 
+		data, resources = result
+
+		# 再次检查data是否为None
+		if data is None:
+			logger.debug(f"result is {result}")
+			logger.error("data is None, 没有找到符合条件的消息")
+			await adapter.send_reply("没有找到符合条件的消息")
+			return
+
+		# 检查conversation是否存在且不为空
+		if not data.get("conversation"):
+			await adapter.send_reply("没有找到可摘要的消息内容")
+			return
+
 		# 生成摘要
-		summary_result = await summary_core.generate_summary2(data)
+		summary_result = await summary_core.generate_summary(data)
 
 		# 发送摘要结果
 		await adapter.send(
-			TextSegment(f"💬 会话摘要：\n\n{summary_result}")
+			TextSegment(f"💬 会话摘要 (最近 {count} 条消息" +
+			            ("，仅限被引用用户" if sender_only else "") +
+			            f")：\n\n{summary_result}")
 		)
 
 		logger.info(f"Generated summary for group {event.group_id}: {len(data['conversation'])} messages")

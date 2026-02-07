@@ -280,6 +280,7 @@ async def do_record(event: MessageEvent, adapter: Adapter):
         for i, seg in enumerate(event.message):
             if isinstance(seg, ImageSegment):
                 url = URL(str(seg.data["url"]))
+                logger.error("#####seg.data"+ seg.data)
                 await ensure_mediafile(sess, url_to_fileid(url))
                 urls_to_fetch.append(url)
             elif isinstance(seg, RecordSegment):
